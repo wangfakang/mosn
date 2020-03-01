@@ -20,46 +20,17 @@ package originaldst
 import (
 	"errors"
 	"fmt"
-	__tl "log"
 	"net"
 	"syscall"
 
-	"mosn.io/api"
 	"mosn.io/mosn/pkg/log"
-	"mosn.io/mosn/pkg/types"
 )
-
-// OriginDST filter used to find out destination address of a connection which been redirected by iptables
 
 // OriginDST, option for syscall.GetsockoptIPv6Mreq
 const (
 	SO_ORIGINAL_DST      = 80
 	IP6T_SO_ORIGINAL_DST = 80
 )
-
-type originalDst struct {
-}
-
-// NewOriginalDst new an original dst filter
-func NewOriginalDst() OriginalDst {
-	return &originalDst{}
-}
-
-// OnAccept called when connection accept
-func (filter *originalDst) OnAccept(cb types.ListenerFilterCallbacks) api.FilterStatus {
-	ip, port, err := getOriginalAddr(cb.Conn())
-	if err != nil {
-		log.DefaultLogger.Errorf("[originaldst] get original addr failed: %v", err)
-		return api.Continue
-	}
-	ips := fmt.Sprintf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3])
-
-	__tl.Print("ips:", ips)
-
-	cb.SetOriginalAddr(ips, port)
-
-	return api.Continue
-}
 
 func getOriginalAddr(conn net.Conn) ([]byte, int, error) {
 	tc := conn.(*net.TCPConn)

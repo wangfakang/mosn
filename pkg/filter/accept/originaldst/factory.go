@@ -15,37 +15,45 @@
  * limitations under the License.
  */
 
-package server
+package originaldst
 
 import (
-	"time"
+	"fmt"
+	__tl "log"
 
 	"mosn.io/api"
 	"mosn.io/mosn/pkg/config/v2"
 	"mosn.io/mosn/pkg/log"
-	"mosn.io/mosn/pkg/types"
 )
 
-type Config struct {
-	ServerName      string
-	LogPath         string
-	LogLevel        log.Level
-	LogRoller       string
-	GracefulTimeout time.Duration
-	Processor       int
-	UseNetpollMode  bool
+// OriginDST filter used to find out destination address of a connection which been redirected by iptables
+
+func init() {
+	api.RegisterListener(v2.ORIGINALDST_LISTENER_FILTER, CreateOriginalDstFactory)
 }
 
-type Server interface {
-	AddListener(lc *v2.Listener, listenerFiltersFactories []api.ListenerFilterChainFactory,
-		networkFiltersFactories []api.NetworkFilterChainFactory,
-		streamFiltersFactories []api.StreamFilterChainFactory) (types.ListenerEventListener, error)
+type originalDst struct {
+}
 
-	Start()
+func CreateOriginalDstFactory(conf map[string]interface{}) (api.ListenerFilterChainFactory, error) {
+	return &originalDst{}, nil
+}
 
-	Restart()
+// OnAccept called when connection accept
+func (filter *originalDst) OnAccept(cb api.ListenerFilterChainFactoryCallbacks) api.FilterStatus {
+	ip, port, err := getOriginalAddr(cb.Conn())
+	if err != nil {
+		log.DefaultLogger.Errorf("[originaldst] get original addr failed: %v", err)
+		return api.Continue
+	}
 
-	Close()
+	cb.SetUseOriginalDst(true)
 
-	Handler() types.ConnectionHandler
+	ips := fmt.Sprintf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3])
+
+	__tl.Print("ips:", ips)
+
+	cb.SetOriginalAddr(ips, port)
+
+	return api.Continue
 }

@@ -167,18 +167,18 @@ func NewMosn(c *v2.MOSNConfig) *Mosn {
 					m.routerManager.AddOrUpdateRouters(routerConfig)
 				}
 
+				var lfcf []api.ListenerFilterChainFactory
 				var nfcf []api.NetworkFilterChainFactory
 				var sfcf []api.StreamFilterChainFactory
 
 				// Note: as we use fasthttp and net/http2.0, the IO we created in mosn should be disabled
 				// network filters
-				if !lc.UseOriginalDst {
-					// network and stream filters
-					nfcf = configmanager.GetNetworkFilters(&lc.FilterChains[0])
-					sfcf = configmanager.GetStreamFilters(lc.StreamFilters)
-				}
+				// listener network and stream filters
+				lfcf = configmanager.GetListenerFilters(lc.ListenerFilters)
+				nfcf = configmanager.GetNetworkFilters(&lc.FilterChains[0])
+				sfcf = configmanager.GetStreamFilters(lc.StreamFilters)
 
-				_, err := srv.AddListener(lc, nfcf, sfcf)
+				_, err := srv.AddListener(lc, lfcf, nfcf, sfcf)
 				if err != nil {
 					log.StartLogger.Fatalf("[mosn] [NewMosn] AddListener error:%s", err.Error())
 				}
