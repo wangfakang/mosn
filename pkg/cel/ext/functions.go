@@ -18,6 +18,7 @@
 package ext
 
 import (
+	"context"
 	"regexp"
 	"strings"
 
@@ -29,10 +30,16 @@ import (
 	"github.com/google/cel-go/interpreter/functions"
 	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	"mosn.io/mosn/pkg/cel/attribute"
+	"mosn.io/mosn/pkg/variable"
 )
 
 var (
 	StandardFunctions = cel.Declarations([]*expr.Decl{
+		decls.NewFunction("rewrite_request_url",
+			decls.NewOverload("rewrite_request_url",
+				[]*expr.Type{mosnCtxObjectType, decls.String}, decls.Bool),
+			decls.NewInstanceOverload("rewrite_request_url",
+				[]*expr.Type{mosnCtxObjectType, decls.String}, decls.Bool)),
 		decls.NewFunction("match",
 			decls.NewOverload("match",
 				[]*expr.Type{decls.String, decls.String}, decls.Bool),
@@ -74,6 +81,22 @@ var (
 	}...)
 
 	StandardOverloads = cel.Functions([]*functions.Overload{
+		{Operator: "rewrite_request_url",
+			Binary: func(v, s ref.Val) ref.Val {
+				println("enter 00000000000000000")
+				if v.Type() != mosnCtxType {
+					return types.NewErr("overload cannot be applied to '%s'", v.Type())
+				}
+
+				mctx := v.Value().(context.Context)
+				t, err := variable.GetVariableValue(mctx, "Http1_request_method")
+				println("9999999999999999999999", t)
+				if err != nil {
+					println("0000000000000000000000", err.Error())
+				}
+				return types.Bool(true)
+			},
+		},
 		{Operator: "match",
 			Binary: callInStrStrOutBool(externMatch),
 		},

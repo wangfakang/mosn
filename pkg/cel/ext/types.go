@@ -18,6 +18,7 @@
 package ext
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -38,6 +39,8 @@ import (
 
 func ConvertType(typ attribute.Kind) *expr.Type {
 	switch typ {
+	case MosnCtxAttribute:
+		return mosnCtxObjectType
 	case attribute.STRING:
 		return decls.String
 	case attribute.INT64:
@@ -91,6 +94,8 @@ func RecoverType(typ *expr.Type) attribute.Kind {
 
 	case *expr.Type_MessageType:
 		switch t.MessageType {
+		case mosnctx:
+			return MosnCtxAttribute
 		case ipAddressType:
 			return attribute.IP_ADDRESS
 		case emailAddressType:
@@ -114,6 +119,8 @@ func RecoverType(typ *expr.Type) attribute.Kind {
 
 func ConvertValue(typ attribute.Kind, value interface{}) ref.Val {
 	switch typ {
+	case MosnCtxAttribute:
+		return &mosnCtx{value.(context.Context)}
 	case attribute.STRING, attribute.INT64, attribute.DOUBLE, attribute.BOOL:
 		return types.DefaultTypeAdapter.NativeToValue(value)
 	case attribute.TIMESTAMP:
@@ -139,6 +146,8 @@ func ConvertValue(typ attribute.Kind, value interface{}) ref.Val {
 
 func RecoverValue(value ref.Val) (interface{}, error) {
 	switch value.Type() {
+	case mosnCtxType:
+		return value.Value(), nil
 	case types.ErrType:
 		if err, ok := value.Value().(error); ok {
 			return nil, err
@@ -172,6 +181,7 @@ func RecoverValue(value ref.Val) (interface{}, error) {
 
 var defaultValues = map[attribute.Kind]ref.Val{
 	attribute.STRING:        types.String(""),
+	MosnCtxAttribute:        &mosnCtx{Ctx: context.Background()},
 	attribute.INT64:         types.Int(0),
 	attribute.DOUBLE:        types.Double(0),
 	attribute.BOOL:          types.Bool(false),
@@ -304,3 +314,65 @@ func (v wrapperValue) Value() interface{} {
 		return v.s
 	}
 }
+
+var (
+	mosnctx                          = "mosnctx"
+	MosnCtxAttribute  attribute.Kind = 100
+	mosnCtxType                      = types.NewTypeValue("mosnctx")
+	mosnCtxObjectType                = decls.NewObjectType("mosnctx")
+)
+
+type mosnCtx struct {
+	Ctx context.Context
+}
+
+func (mosnCtx) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
+	return nil, errors.New("cannot convert mosnCtx to native types")
+}
+
+func (mosnCtx) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("cannot convert mosnCtx to CEL types")
+}
+
+func (v *mosnCtx) Equal(other ref.Val) ref.Val {
+	if other.Type() != mosnCtxType {
+		return types.NewErr("connot compare types")
+	}
+
+	w, ok := other.(*mosnCtx)
+	if !ok {
+		return types.NewErr("connot compare types")
+	}
+
+	return types.Bool(w == v)
+}
+
+func (v mosnCtx) Type() ref.Type {
+	return mosnCtxType
+}
+
+func (v mosnCtx) Value() interface{} {
+	return v.Ctx
+}
+
+//func (v stringMapValue) Get(index ref.Val) ref.Val {
+//	if index.Type() != types.StringType {
+//		return types.NewErr("index should be a string")
+//	}
+//
+//	field := index.Value().(string)
+//	value, found := v.headerMap.Get(field)
+//	if found {
+//		return types.String(value)
+//	}
+//	return types.NewErr("no such key: '%s'", field)
+//}
+//func (v stringMapValue) Contains(index ref.Val) ref.Val {
+//	if index.Type() != types.StringType {
+//		return types.NewErr("index should be a string")
+//	}
+//
+//	field := index.Value().(string)
+//	_, found := v.headerMap.Get(field)
+//	return types.Bool(found)
+//}
