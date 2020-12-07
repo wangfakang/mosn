@@ -699,31 +699,30 @@ type serverStream struct {
 
 // types.StreamSender
 func (s *serverStream) AppendHeaders(context context.Context, headersIn types.HeaderMap, endStream bool) error {
-	switch headers := headersIn.(type) {
-	case mosnhttp.RequestHeader:
-		// hijack scene
-		if status, ok := headers.Get(types.HeaderStatus); ok {
-			headers.Del(types.HeaderStatus)
+	if header, ok := headersIn.(mosnhttp.ResponseHeader); ok {
+		if status, ok := headersIn.Get(types.HeaderStatus); ok {
+			header.Del(types.HeaderStatus)
+
+			statusCode, _ := strconv.Atoi(status)
+			header.SetStatusCode(statusCode)
+		}
+
+		header.CopyTo(&s.response.Header)
+
+	} else if isDirectResponse, err := variable.GetVariableValue(context, types.VarProxyIsDirectResponse); isDirectResponse == types.IsDirectResponse {
+		if status, ok := headersIn.Get(types.HeaderStatus); ok {
+			headersIn.Del(types.HeaderStatus)
 
 			statusCode, _ := strconv.Atoi(status)
 			s.response.SetStatusCode(statusCode)
 
-			removeInternalHeaders(headers, s.connection.conn.RemoteAddr())
+			removeInternalHeaders(headersIn.(mosnhttp.RequestHeader), s.connection.conn.RemoteAddr())
 
 			// need to echo all request headers for protocol convert
-			headers.VisitAll(func(key, value []byte) {
+			headersIn.VisitAll(func(key, value []byte) {
 				s.response.Header.SetBytesKV(key, value)
 			})
 		}
-	case mosnhttp.ResponseHeader:
-		if status, ok := headers.Get(types.HeaderStatus); ok {
-			headers.Del(types.HeaderStatus)
-
-			statusCode, _ := strconv.Atoi(status)
-			headers.SetStatusCode(statusCode)
-		}
-
-		headers.CopyTo(&s.response.Header)
 	}
 
 	if endStream {

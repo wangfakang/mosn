@@ -448,15 +448,14 @@ func (s *serverStream) AppendHeaders(ctx context.Context, headers api.HeaderMap,
 		status = 200
 	}
 
-	switch header := headers.(type) {
-	case *mhttp2.RspHeader:
+	if header, ok := headers.(*mhttp2.RspHeader); ok {
 		rsp = header.Rsp
-	case *mhttp2.ReqHeader:
+	} else if isDirectResponse, _ := variable.GetVariableValue(ctx, types.VarProxyIsDirectResponse); isDirectResponse == types.IsDirectResponse {
 		// indicates the invocation is under hijack scene
 		rsp = new(http.Response)
 		rsp.StatusCode = status
 		rsp.Header = s.h2s.Request.Header
-	default:
+	} else {
 		rsp = new(http.Response)
 		rsp.StatusCode = status
 		rsp.Header = mhttp2.EncodeHeader(headers)

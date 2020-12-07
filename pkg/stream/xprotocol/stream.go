@@ -64,7 +64,8 @@ func (s *xStream) AppendHeaders(ctx context.Context, headers types.HeaderMap, en
 	}
 
 	// hijack process
-	if s.direction == stream.ServerStream && frame.GetStreamType() == xprotocol.Request {
+	//if s.direction == stream.ServerStream && frame.GetStreamType() == xprotocol.Request {
+	if isDirectResponse, _ := variable.GetVariableValue(ctx, types.VarProxyIsDirectResponse); isDirectResponse == types.IsDirectResponse {
 		s.frame, err = s.buildHijackResp(frame, headers)
 		if err != nil {
 			return
