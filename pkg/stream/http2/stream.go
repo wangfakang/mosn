@@ -112,10 +112,6 @@ func (conn *streamConnection) EnableWorkerPool() bool {
 	return true
 }
 
-func (conn *streamConnection) GoAway() {
-	// todo
-}
-
 // types.Stream
 // types.StreamSender
 type stream struct {
@@ -182,9 +178,14 @@ func streamConfigHandler(v interface{}) interface{} {
 func parseStreamConfig(ctx context.Context) StreamConfig {
 	streamConfig := defaultStreamConfig
 	// get extend config from ctx
-	pgc := mosnctx.Get(ctx, types.ContextKeyProxyGeneralConfig)
-	if cfg, ok := pgc.(StreamConfig); ok {
-		streamConfig = cfg
+	if pgc := mosnctx.Get(ctx, types.ContextKeyProxyGeneralConfig); pgc != nil {
+		if extendConfig, ok := pgc.(map[api.ProtocolName]interface{}); ok {
+			if http2Config, ok := extendConfig[protocol.HTTP2]; ok {
+				if cfg, ok := http2Config.(StreamConfig); ok {
+					streamConfig = cfg
+				}
+			}
+		}
 	}
 	return streamConfig
 }
@@ -197,6 +198,10 @@ type serverStreamConnection struct {
 	config  StreamConfig
 
 	serverCallbacks types.ServerStreamConnectionEventListener
+}
+
+func (conn *serverStreamConnection) GoAway() {
+	conn.sc.GracefulShutdown()
 }
 
 func newServerStreamConnection(ctx context.Context, connection api.Connection, serverCallbacks types.ServerStreamConnectionEventListener) types.ServerStreamConnection {
@@ -217,11 +222,7 @@ func newServerStreamConnection(ctx context.Context, connection api.Connection, s
 		serverCallbacks: serverCallbacks,
 	}
 
-	if pgc := mosnctx.Get(ctx, types.ContextKeyProxyGeneralConfig); pgc != nil {
-		if extendConfig, ok := pgc.(StreamConfig); ok {
-			sc.useStream = extendConfig.Http2UseStream
-		}
-	}
+	sc.useStream = sc.config.Http2UseStream
 
 	// init first context
 	sc.cm.Next()
@@ -634,6 +635,10 @@ type clientStreamConnection struct {
 	streamConnectionEventListener types.StreamConnectionEventListener
 }
 
+func (conn *clientStreamConnection) GoAway() {
+	// todo
+}
+
 func newClientStreamConnection(ctx context.Context, connection api.Connection,
 	clientCallbacks types.StreamConnectionEventListener) types.ClientStreamConnection {
 
@@ -651,11 +656,7 @@ func newClientStreamConnection(ctx context.Context, connection api.Connection,
 		streamConnectionEventListener: clientCallbacks,
 	}
 
-	if pgc := mosnctx.Get(ctx, types.ContextKeyProxyGeneralConfig); pgc != nil {
-		if extendConfig, ok := pgc.(StreamConfig); ok {
-			sc.useStream = extendConfig.Http2UseStream
-		}
-	}
+	sc.useStream = parseStreamConfig(ctx).Http2UseStream
 
 	// init first context
 	sc.cm.Next()

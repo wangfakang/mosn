@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/urfave/cli"
+
 	v2 "mosn.io/mosn/pkg/config/v2"
 	"mosn.io/mosn/pkg/configmanager"
 	"mosn.io/mosn/pkg/log"
@@ -93,7 +94,7 @@ const (
 )
 
 // the current Application is Mosn,
-// we may implement more applications in the feature
+// we may implement more applications in the future.
 type Application interface {
 	// inherit config from old server when it exists, otherwise, use the local config
 	// init its object members
@@ -102,8 +103,13 @@ type Application interface {
 	Start()
 	// transfer existing connection from old server for smooth upgrade
 	InheritConnections() error
-	// stop working
+	// Shutdown means graceful stop
+	Shutdown() error
+	// Close means stop working immediately
 	Close()
+	// IsFromUpgrade application start from upgrade mode,
+	// means inherit connections and configuration(if enabled) from old application.
+	IsFromUpgrade() bool
 }
 
 var (
@@ -124,7 +130,7 @@ type Data struct {
 	// ctx contains the start parameters
 	ctx *cli.Context
 	// config path represents the config file path,
-	// will create basic config from it and if auto config dump is setted,
+	// will create basic config from it and if auto config dump is set,
 	// new config data will write into this path
 	configPath string
 	// basic config, created after parameters parsed stage
@@ -320,6 +326,12 @@ func (stm *StageManager) AppendGracefulStopStage(f func(Application) error) *Sta
 func (stm *StageManager) runGracefulStopStage() {
 	st := time.Now()
 	stm.SetState(GracefulStopping)
+	// 1. graceful stop the app firstly
+	if err := stm.app.Shutdown(); err != nil {
+		log.DefaultLogger.Errorf("failed to graceful stop app: %v", err)
+		stm.exitCode = 4
+	}
+	// 2. run the registered hooks
 	for _, f := range stm.gracefulStopStages {
 		if err := f(stm.app); err != nil {
 			log.DefaultLogger.Errorf("failed to run graceful stop callback: %v", err)
@@ -327,7 +339,7 @@ func (stm *StageManager) runGracefulStopStage() {
 		}
 	}
 
-	log.StartLogger.Infof("pre stop stage cost: %v", time.Since(st))
+	log.StartLogger.Infof("graceful stop stage cost: %v", time.Since(st))
 }
 
 // after application is not working
@@ -474,6 +486,12 @@ func GetState() State {
 
 // expose this method just make UT easier,
 // should not use it directly.
+func SetState(s State) {
+	stm.SetState(s)
+}
+
+// expose this method just make UT easier,
+// should not use it directly.
 func (stm *StageManager) SetState(s State) {
 	stm.state = s
 	log.DefaultLogger.Infof("[stagemanager] state changed to %d", s)
@@ -486,7 +504,7 @@ func RegisterOnStateChanged(f func(State)) {
 	stm.onStateChangedCallbacks = append(stm.onStateChangedCallbacks, f)
 }
 
-func RegsiterUpgradeHandler(f func() error) {
+func RegisterUpgradeHandler(f func() error) {
 	stm.upgradeHandler = f
 }
 
@@ -522,7 +540,7 @@ func (stm *StageManager) runUpgrade() {
 	stm.wg.Done()
 }
 
-// notice the stop action to stage manager
+// NoticeStop notices the stop action to stage manager
 func NoticeStop(action StopAction) {
 	stm.stopAction = action
 	stm.runBeforeStopStages()
@@ -552,4 +570,14 @@ func (stm *StageManager) RunAll() {
 	stm.WaitFinish()
 	// stop working
 	stm.Stop()
+}
+
+// IsActiveUpgrading just for backward compatible
+// means the current application is upgrading from an old application, and not running yet.
+// may be inheriting connections or configuration from old one.
+func IsActiveUpgrading() bool {
+	if stm.app != nil {
+		return stm.app.IsFromUpgrade() && stm.state < Running
+	}
+	return false
 }

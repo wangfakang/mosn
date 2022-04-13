@@ -23,13 +23,15 @@ import (
 	"strconv"
 	"time"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	_ "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	"github.com/urfave/cli"
-	_ "mosn.io/mosn/istio/istio152"
-	_ "mosn.io/mosn/istio/istio152/filter/stream/jwtauthn"
-	_ "mosn.io/mosn/istio/istio152/filter/stream/mixer"
-	_ "mosn.io/mosn/istio/istio152/filter/stream/stats"
-	_ "mosn.io/mosn/istio/istio152/sds"
-	_ "mosn.io/mosn/istio/istio152/xds"
+	_ "mosn.io/mosn/istio/istio1106"
+	_ "mosn.io/mosn/istio/istio1106/filter/stream/jwtauthn"
+	_ "mosn.io/mosn/istio/istio1106/filter/stream/mixer"
+	_ "mosn.io/mosn/istio/istio1106/filter/stream/stats"
+	_ "mosn.io/mosn/istio/istio1106/sds"
+	_ "mosn.io/mosn/istio/istio1106/xds"
 	_ "mosn.io/mosn/pkg/admin/debug"
 	_ "mosn.io/mosn/pkg/filter/listener/originaldst"
 	_ "mosn.io/mosn/pkg/filter/network/connectionmanager"
@@ -74,8 +76,10 @@ import (
 	_ "mosn.io/pkg/buffer"
 )
 
-// Version mosn version
-var Version = "0.26.0"
+var _ = &corev3.Pipe{}
+
+// Version mosn version is specified by build tag, in VERSION file
+var Version = ""
 
 func main() {
 	app := newMosnApp(&cmdStart)
@@ -93,14 +97,14 @@ func newMosnApp(startCmd *cli.Command) *cli.App {
 	app.Usage = "MOSN is modular observable smart netstub."
 	app.Flags = cmdStart.Flags
 
-	// commands
+	//commands
 	app.Commands = []cli.Command{
 		cmdStart,
 		cmdStop,
 		cmdReload,
 	}
 
-	// action
+	//action
 	app.Action = func(c *cli.Context) error {
 		if c.NumFlags() == 0 {
 			return cli.ShowAppHelp(c)
