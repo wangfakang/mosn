@@ -116,7 +116,6 @@ var (
 	stm StageManager = StageManager{
 		state:          Nil,
 		data:           Data{},
-		started:        false,
 		paramsStages:   []func(*cli.Context){},
 		initStages:     []func(*v2.MOSNConfig){},
 		preStartStages: []func(Application){},
@@ -139,13 +138,13 @@ type Data struct {
 
 // StageManager is used to controls service life stages.
 type StageManager struct {
+	lock                    sync.Mutex
 	state                   State
 	exitCode                int
 	stopAction              StopAction
 	data                    Data
 	app                     Application // Application interface
 	wg                      sync.WaitGroup
-	started                 bool
 	paramsStages            []func(*cli.Context)
 	initStages              []func(*v2.MOSNConfig)
 	preStartStages          []func(Application)
@@ -163,6 +162,7 @@ func InitStageManager(ctx *cli.Context, path string, app Application) *StageMana
 	stm.data.configPath = path
 	stm.data.ctx = ctx
 	stm.app = app
+	stm.state = Nil
 
 	RegisterOnStateChanged(func(s State) {
 		metrics.SetStateCode(int64(s))
@@ -172,7 +172,7 @@ func InitStageManager(ctx *cli.Context, path string, app Application) *StageMana
 }
 
 func (stm *StageManager) AppendParamsParsedStage(f func(*cli.Context)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -194,7 +194,7 @@ func (stm *StageManager) runParamsParsedStage() {
 
 // init work base on the local config
 func (stm *StageManager) AppendInitStage(f func(*v2.MOSNConfig)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -216,9 +216,15 @@ func (stm *StageManager) runInitStage() {
 	log.StartLogger.Infof("init stage cost: %v", time.Since(st))
 }
 
+func (stm *StageManager) runStopInit() {
+	for _, f := range stm.initStages {
+		f(stm.data.config)
+	}
+}
+
 // more init works after inherit config from old server and new server inited
 func (stm *StageManager) AppendPreStartStage(f func(Application)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -237,7 +243,7 @@ func (stm *StageManager) runPreStartStage() {
 
 // start
 func (stm *StageManager) AppendStartStage(f func(Application)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -258,6 +264,8 @@ func (stm *StageManager) runStartStage() {
 
 	// transfer existing connections from old server
 	if err := stm.app.InheritConnections(); err != nil {
+		// align to the old exit code
+		stm.exitCode = 2
 		stm.Stop()
 	}
 
@@ -266,7 +274,7 @@ func (stm *StageManager) runStartStage() {
 
 // after start, already working (accepting request)
 func (stm *StageManager) AppendAfterStartStage(f func(Application)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -286,8 +294,6 @@ func (stm *StageManager) runAfterStartStage() {
 
 // Run until the application is started
 func (stm *StageManager) Run() {
-	// 0: mark already started
-	stm.started = true
 	// 1: parser params
 	stm.runParamsParsedStage()
 	// 2: init
@@ -305,7 +311,7 @@ func (stm *StageManager) Run() {
 // used for the main goroutine wait the finish signal
 // if Run is not called, return directly
 func (stm *StageManager) WaitFinish() {
-	if !stm.started {
+	if stm.state == Nil {
 		return
 	}
 	stm.wg.Wait()
@@ -314,11 +320,13 @@ func (stm *StageManager) WaitFinish() {
 // graceful stop handlers,
 // will exit with non-zero code when a callback handler return error
 func (stm *StageManager) AppendGracefulStopStage(f func(Application) error) *StageManager {
-	if f == nil || stm.started {
-		log.StartLogger.Errorf("[stage] invalid stage function or already started")
+	if f == nil || stm.state > Running {
+		log.StartLogger.Errorf("[stage] invalid stage function or already stopping")
 		return stm
 	}
+	stm.lock.Lock()
 	stm.gracefulStopStages = append(stm.gracefulStopStages, f)
+	stm.lock.Unlock()
 	return stm
 }
 
@@ -331,6 +339,8 @@ func (stm *StageManager) runGracefulStopStage() {
 		log.DefaultLogger.Errorf("failed to graceful stop app: %v", err)
 		stm.exitCode = 4
 	}
+	stm.lock.Lock()
+	defer stm.lock.Unlock()
 	// 2. run the registered hooks
 	for _, f := range stm.gracefulStopStages {
 		if err := f(stm.app); err != nil {
@@ -344,7 +354,7 @@ func (stm *StageManager) runGracefulStopStage() {
 
 // after application is not working
 func (stm *StageManager) AppendAfterStopStage(f func(Application)) *StageManager {
-	if f == nil || stm.started {
+	if f == nil || stm.state != Nil {
 		log.StartLogger.Errorf("[stage] invalid stage function or already started")
 		return stm
 	}
@@ -367,7 +377,7 @@ func (stm *StageManager) runAfterStopStage() {
 // 1: failed to start
 // 4: run before-stop/graceful-stop callback failed
 func (stm *StageManager) Stop() {
-	if !stm.started {
+	if stm.state == Nil {
 		return
 	}
 	preState := stm.state
@@ -388,18 +398,21 @@ func (stm *StageManager) Stop() {
 
 	// other cleanup actions
 	stm.runAfterStopStage()
-	logger.CloseAll()
 
-	stm.SetState(Stopped)
-
-	// main goroutine is not waiting, exit directly
 	if preState != Running {
 		log.StartLogger.Errorf("[start] failed to start application at stage: %v", preState)
-		os.Exit(1)
 	}
+
+	stm.SetState(Stopped)
+	logger.CloseAll()
 
 	if stm.exitCode != 0 {
 		os.Exit(stm.exitCode)
+	}
+
+	// main goroutine is not waiting, exit directly
+	if preState != Running {
+		os.Exit(1)
 	}
 
 	// will exit with 0 by default
@@ -458,7 +471,13 @@ func OnGracefulStop(f func() error) {
 
 // will exit with non-zero code when a callback handler return error
 func (stm *StageManager) AppendBeforeStopStage(f func(StopAction, Application) error) *StageManager {
+	if f == nil || stm.state > Running {
+		log.StartLogger.Errorf("[stage] invalid stage function or already stopping")
+		return stm
+	}
+	stm.lock.Lock()
 	stm.beforeStopStages = append(stm.beforeStopStages, f)
+	stm.lock.Unlock()
 	return stm
 }
 
@@ -470,6 +489,8 @@ func OnBeforeStopStage(f func(StopAction, Application) error) {
 func (stm StageManager) runBeforeStopStages() {
 	st := time.Now()
 	stm.SetState(BeforeStop)
+	stm.lock.Lock()
+	defer stm.lock.Unlock()
 	for _, f := range stm.beforeStopStages {
 		if err := f(stm.stopAction, stm.app); err != nil {
 			log.DefaultLogger.Errorf("failed to run before-stop callback: %v", err)
@@ -580,4 +601,69 @@ func IsActiveUpgrading() bool {
 		return stm.app.IsFromUpgrade() && stm.state < Running
 	}
 	return false
+}
+
+// StopMosnProcess stops Mosn process via command line,
+// and it not support stop on windows.
+func (stm *StageManager) StopMosnProcess() (err error) {
+	// init
+	stm.runParamsParsedStage()
+	stm.runStopInit()
+
+	mosnConfig := stm.data.config
+
+	// reads mosn process pid from `mosn.pid` file.
+	var p int
+	if p, err = pid.GetPidFrom(mosnConfig.Pid); err != nil {
+		log.StartLogger.Errorf("[mosn stop] fail to get pid: %v", err)
+		time.Sleep(100 * time.Millisecond) // waiting logs output
+		return
+	}
+
+	// finds process and sends SIGINT to mosn process, makes it force exit.
+	proc, err := os.FindProcess(p)
+	if err != nil {
+		log.StartLogger.Errorf("[mosn stop] fail to find process(%v), err: %v", p, err)
+		return
+	}
+	// check if process is existing.
+	err = proc.Signal(syscall.Signal(0))
+	if err != nil {
+		log.StartLogger.Errorf("[mosn stop] process(%v) is not existing, err: %v", p, err)
+		time.Sleep(100 * time.Millisecond) // waiting logs output
+		return
+	}
+
+	log.StartLogger.Infof("[mosn stop] sending INT signal to process(%v)", p)
+	if err = proc.Signal(syscall.SIGINT); err != nil {
+		log.StartLogger.Errorf("[mosn stop] fail to send INT signal to mosn process(%v), err: %v", p, err)
+		time.Sleep(100 * time.Millisecond) // waiting logs output
+		return
+	}
+
+	// check the process status
+	t := time.Now().Add(10 * time.Second)
+	cnt := 0
+	for {
+
+		if time.Now().After(t) {
+			log.StartLogger.Errorf("[mosn stop] mosn process(%v) is still existing after waiting for %v, ignore it and quiting ...", p, 10*time.Second)
+			return
+		}
+
+		cnt++
+		if cnt%10 == 0 { //log it per second.
+			log.StartLogger.Infof("[mosn stop] mosn process(%v)  is still existing, waiting for it quiting", p)
+		}
+
+		if err = proc.Signal(syscall.Signal(0)); err == nil {
+			// process alive still.
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		log.StartLogger.Infof("[mosn stop] stopped mosn process(%v) successfully.", p)
+		time.Sleep(100 * time.Millisecond) // waiting logs output
+		return
+	}
 }
