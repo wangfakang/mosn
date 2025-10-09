@@ -693,10 +693,10 @@ func (mr *MockHostMockRecorder) HealthFlag() *gomock.Call {
 }
 
 // HostStats mocks base method.
-func (m *MockHost) HostStats() types.HostStats {
+func (m *MockHost) HostStats() *types.HostStats {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HostStats")
-	ret0, _ := ret[0].(types.HostStats)
+	ret0, _ := ret[0].(*types.HostStats)
 	return ret0
 }
 
@@ -905,11 +905,39 @@ func (mr *MockClusterInfoMockRecorder) IdleTimeout() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IdleTimeout", reflect.TypeOf((*MockClusterInfo)(nil).IdleTimeout))
 }
 
+// IsClusterPoolEnable mocks base method.
+func (m *MockClusterInfo) IsClusterPoolEnable() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsClusterPoolEnable")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsClusterPoolEnable indicates an expected call of IsClusterPoolEnable.
+func (mr *MockClusterInfoMockRecorder) IsClusterPoolEnable() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsClusterPoolEnable", reflect.TypeOf((*MockClusterInfo)(nil).IsClusterPoolEnable))
+}
+
+// KeepAliveConfig mocks base method.
+func (m *MockClusterInfo) KeepAliveConfig() types.KeepAliveConfig {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "KeepAliveConfig")
+	ret0, _ := ret[0].(types.KeepAliveConfig)
+	return ret0
+}
+
+// KeepAliveConfig indicates an expected call of KeepAliveConfig.
+func (mr *MockClusterInfoMockRecorder) KeepAliveConfig() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KeepAliveConfig", reflect.TypeOf((*MockClusterInfo)(nil).KeepAliveConfig))
+}
+
 // LbConfig mocks base method.
-func (m *MockClusterInfo) LbConfig() v2.IsCluster_LbConfig {
+func (m *MockClusterInfo) LbConfig() *v2.LbConfig {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LbConfig")
-	ret0, _ := ret[0].(v2.IsCluster_LbConfig)
+	ret0, _ := ret[0].(*v2.LbConfig)
 	return ret0
 }
 
@@ -1032,10 +1060,10 @@ func (mr *MockClusterInfoMockRecorder) SlowStart() *gomock.Call {
 }
 
 // Stats mocks base method.
-func (m *MockClusterInfo) Stats() types.ClusterStats {
+func (m *MockClusterInfo) Stats() *types.ClusterStats {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats")
-	ret0, _ := ret[0].(types.ClusterStats)
+	ret0, _ := ret[0].(*types.ClusterStats)
 	return ret0
 }
 

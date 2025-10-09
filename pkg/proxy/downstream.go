@@ -218,10 +218,10 @@ func (s *downStream) endStream() {
 
 // Clean up on the very end of the stream: end stream or reset stream
 // Resources to clean up / reset:
-// 	+ upstream request
-// 	+ all timers
-// 	+ all filters
-//  + remove stream in proxy context
+//   - upstream request
+//   - all timers
+//   - all filters
+//   - remove stream in proxy context
 func (s *downStream) cleanStream() {
 	if !atomic.CompareAndSwapUint32(&s.downstreamCleaned, 0, 1) {
 		return
@@ -375,7 +375,8 @@ func (s *downStream) OnReceive(ctx context.Context, headers types.HeaderMap, dat
 	s.tracks = track.TrackBufferByContext(ctx).Tracks
 
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
-		log.Proxy.Debugf(s.context, "[proxy] [downstream] OnReceive headers:%+v, data:%+v, trailers:%+v", headers, data, trailers)
+		log.Proxy.Debugf(s.context, "[proxy] [downstream] OnReceive")
+		log.Proxy.Tracef(s.context, "[proxy] [downstream] OnReceive headers:%+v, data:%+v, trailers:%+v", headers, data, trailers)
 	}
 
 	id := atomic.LoadUint32(&s.ID)
@@ -592,7 +593,8 @@ func (s *downStream) receive(ctx context.Context, id uint32, phase types.Phase) 
 			}
 
 			if log.Proxy.GetLogLevel() >= log.DEBUG {
-				log.Proxy.Debugf(s.context, "[proxy] [downstream] OnReceive send downstream response %+v", s.downstreamRespHeaders)
+				log.Proxy.Debugf(s.context, "[proxy] [downstream] OnReceive send downstream response")
+				log.Proxy.Tracef(s.context, "[proxy] [downstream] OnReceive send downstream response %+v", s.downstreamRespHeaders)
 			}
 
 			phase++
@@ -885,7 +887,8 @@ func (s *downStream) receiveData(endStream bool) {
 
 	data := s.downstreamReqDataBuf
 	if log.Proxy.GetLogLevel() >= log.DEBUG {
-		log.Proxy.Debugf(s.context, "[proxy] [downstream] receive data = %v", data)
+		log.Proxy.Debugf(s.context, "[proxy] [downstream] receive data, len = %v", data.Len())
+		log.Proxy.Tracef(s.context, "[proxy] [downstream] receive data: %v", data)
 	}
 
 	s.requestInfo.SetBytesReceived(s.requestInfo.BytesReceived() + uint64(data.Len()))
@@ -1225,6 +1228,14 @@ func (s *downStream) handleUpstreamStatusCode() {
 		} else {
 			s.upstreamRequest.host.HostStats().UpstreamResponseSuccess.Inc(1)
 			s.upstreamRequest.host.ClusterInfo().Stats().UpstreamResponseSuccess.Inc(1)
+		}
+
+		s.upstreamRequest.host.HostStats().UpstreamResponseTotalEWMA.Update(1)
+		switch {
+		case s.requestInfo.ResponseCode() >= 400 && s.requestInfo.ResponseCode() < 500:
+			s.upstreamRequest.host.HostStats().UpstreamResponseClientErrorEWMA.Update(1)
+		case s.requestInfo.ResponseCode() >= 500 && s.requestInfo.ResponseCode() < 600:
+			s.upstreamRequest.host.HostStats().UpstreamResponseServerErrorEWMA.Update(1)
 		}
 	}
 }

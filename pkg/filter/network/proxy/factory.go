@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"mosn.io/api"
-	"mosn.io/mosn/pkg/config/v2"
+	v2 "mosn.io/mosn/pkg/config/v2"
 	"mosn.io/mosn/pkg/log"
 	"mosn.io/mosn/pkg/protocol"
 	"mosn.io/mosn/pkg/proxy"
@@ -118,7 +118,7 @@ func ParseProxyFilter(cfg map[string]interface{}) (*v2.Proxy, error) {
 	}
 	// set default proxy router name
 	if proxyConfig.RouterHandlerName == "" {
-		proxyConfig.RouterHandlerName = types.DefaultRouteHandler
+		proxyConfig.RouterHandlerName = router.GetDefaultRouteHandlerName()
 	}
 	if !router.MakeHandlerFuncExists(proxyConfig.RouterHandlerName) {
 		log.DefaultLogger.Alertf(types.ErrorKeyConfigParse, "proxy router handler is not exists, will use default handler instead")

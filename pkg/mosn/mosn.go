@@ -18,6 +18,7 @@
 package mosn
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"mosn.io/mosn/pkg/istio"
 	"mosn.io/mosn/pkg/log"
 	"mosn.io/mosn/pkg/metrics"
+	"mosn.io/mosn/pkg/metrics/ewma"
 	"mosn.io/mosn/pkg/metrics/shm"
 	"mosn.io/mosn/pkg/metrics/sink"
 	"mosn.io/mosn/pkg/network"
@@ -100,29 +102,50 @@ func (m *Mosn) inheritHandler() error {
 	var err error
 	m.Upgrade.InheritListeners, m.Upgrade.InheritPacketConn, m.Upgrade.ListenSockConn, err = server.GetInheritListeners()
 	if err != nil {
-		log.StartLogger.Errorf("[mosn] [NewMosn] getInheritListeners failed, exit")
+		log.StartLogger.Errorf("[mosn] [NewMosn] getInheritListeners failed, exiting, err:%v", err)
 		return err
 	}
 	log.StartLogger.Infof("[mosn] [NewMosn] active reconfiguring")
 	// parse MOSNConfig again
 	c := configmanager.Load(configmanager.GetConfigPath())
 	if c.InheritOldMosnconfig {
-		// inherit old mosn config
-		oldMosnConfig, err := server.GetInheritConfig()
+		err = inheritFunc(c)
 		if err != nil {
 			m.Upgrade.ListenSockConn.Close()
-			log.StartLogger.Errorf("[mosn] [NewMosn] GetInheritConfig failed, exit")
+			log.StartLogger.Errorf("[mosn] [NewMosn] InheritConfig failed, exiting, err: %v", err)
 			return err
 		}
-		log.StartLogger.Debugf("[mosn] [NewMosn] old mosn config: %v", oldMosnConfig)
-		c.Servers = oldMosnConfig.Servers
-		c.ClusterManager = oldMosnConfig.ClusterManager
-		c.Extends = oldMosnConfig.Extends
 	}
 	if c.CloseGraceful {
 		c.DisableUpgrade = true
 	}
 	m.Config = c
+	return nil
+}
+
+// replace your own inherit func with default inherit func
+func InitInheritFunc(f func(c *v2.MOSNConfig) error) {
+	inheritFunc = f
+}
+
+var inheritFunc = func(c *v2.MOSNConfig) error {
+	// inherit old mosn config
+	configData, err := server.GetInheritConfig()
+	if err != nil {
+		return nil
+	}
+
+	oldMosnConfig := &v2.MOSNConfig{}
+	err = json.Unmarshal(configData, oldMosnConfig)
+	if err != nil {
+		return err
+	}
+
+	log.StartLogger.Debugf("[mosn] [NewMosn] old mosn config: %v", oldMosnConfig)
+	c.Servers = oldMosnConfig.Servers
+	c.ClusterManager = oldMosnConfig.ClusterManager
+	c.Extends = oldMosnConfig.Extends
+
 	return nil
 }
 
@@ -161,6 +184,18 @@ func (m *Mosn) initializeMetrics() {
 	statsMatcher := config.StatsMatcher
 	metrics.SetStatsMatcher(statsMatcher.RejectAll, statsMatcher.ExclusionLabels, statsMatcher.ExclusionKeys)
 	metrics.SetMetricsFeature(config.FlushMosn, config.LazyFlush)
+
+	// set metrics sample configures
+	if config.SampleConfig.Type != "" {
+		metrics.SetSampleType(metrics.SampleType(config.SampleConfig.Type))
+	}
+	if config.SampleConfig.Size > 0 {
+		metrics.SetSampleSize(config.SampleConfig.Size)
+	}
+	if config.SampleConfig.ExpDecayAlpha > 0 {
+		metrics.SetExpDecayAlpha(config.SampleConfig.ExpDecayAlpha)
+	}
+
 	// create sinks
 	for _, cfg := range config.SinkConfigs {
 		_, err := sink.CreateMetricsSink(cfg.Type, cfg.Config)
@@ -170,6 +205,19 @@ func (m *Mosn) initializeMetrics() {
 			return
 		}
 		log.StartLogger.Infof("[mosn] [init metrics] create metrics sink: %v", cfg.Type)
+	}
+
+	// set ewma alpha
+	if config.EWMAConfig != nil {
+		switch {
+		case config.EWMAConfig.Alpha > 0 && config.EWMAConfig.Alpha < 1:
+			cluster.SetAlpha(config.EWMAConfig.Alpha)
+		case config.EWMAConfig.Target > 0 && config.EWMAConfig.Target < 1 && config.EWMAConfig.Duration != nil:
+			cluster.SetAlpha(ewma.Alpha(config.EWMAConfig.Target, config.EWMAConfig.Duration.Duration))
+		default:
+			log.StartLogger.Errorf("[mosn] [init metrics] invalid EWMA config, use %f as default alpha",
+				cluster.GetAlpha())
+		}
 	}
 }
 
@@ -191,9 +239,9 @@ func (m *Mosn) initClusterManager() {
 	clusters, clusterMap := configmanager.ParseClusterConfig(c.ClusterManager.Clusters)
 	// create cluster manager
 	if mode := c.Mode(); mode == v2.Xds {
-		m.Clustermanager = cluster.NewClusterManagerSingleton(nil, nil, &c.ClusterManager.TLSContext)
+		m.Clustermanager = cluster.NewClusterManagerSingleton(nil, nil, &c.ClusterManager)
 	} else {
-		m.Clustermanager = cluster.NewClusterManagerSingleton(clusters, clusterMap, &c.ClusterManager.TLSContext)
+		m.Clustermanager = cluster.NewClusterManagerSingleton(clusters, clusterMap, &c.ClusterManager)
 	}
 
 }
@@ -244,7 +292,7 @@ func (m *Mosn) initServer() {
 			//initialize server instance
 			srv = server.NewServer(sc, cmf, m.Clustermanager)
 
-			for idx, _ := range serverConfig.Listeners {
+			for idx := range serverConfig.Listeners {
 				// parse ListenerConfig
 				lc := configmanager.ParseListenerConfig(&serverConfig.Listeners[idx], m.Upgrade.InheritListeners, m.Upgrade.InheritPacketConn)
 				// Note lc.FilterChains may be a nil value, and there is a check in srv.AddListener

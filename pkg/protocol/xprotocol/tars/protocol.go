@@ -89,7 +89,7 @@ func (proto tarsProtocol) Mapping(httpStatusCode uint32) uint32 {
 	return 0
 }
 
-//判断packet的类型，response Packet的包tag=5是字段iRet,int类型；request packet的包tag=5是字段sServantName,string类型
+// 判断packet的类型，response Packet的包tag=5是字段iRet,int类型；request packet的包tag=5是字段sServantName,string类型
 func getStreamType(pkg []byte) (byte, error) {
 	// skip pkg length
 	pkg = pkg[4:]
@@ -124,5 +124,6 @@ func (proto tarsProtocol) EnableWorkerPool() bool {
 }
 
 func (proto tarsProtocol) GenerateRequestID(streamID *uint64) uint64 {
-	return atomic.AddUint64(streamID, 1)
+	// fix bug for issue: https://github.com/mosn/mosn/issues/2403
+	return uint64(int32(atomic.AddUint64(streamID, 1)))
 }

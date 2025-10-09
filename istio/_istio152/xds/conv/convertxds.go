@@ -226,10 +226,13 @@ func convertDnsLookupFamily(family xdsapi.Cluster_DnsLookupFamily) v2.DnsLookupF
 }
 
 // TODO support more LB converter
-func convertLbConfig(config interface{}) v2.IsCluster_LbConfig {
-	switch config.(type) {
+func convertLbConfig(config interface{}) *v2.LbConfig {
+	switch c := config.(type) {
 	case *xdsv2.Cluster_LeastRequestLbConfig:
-		return &v2.LeastRequestLbConfig{ChoiceCount: config.(*xdsv2.Cluster_LeastRequestLbConfig).ChoiceCount.GetValue()}
+		lbConfig := &v2.LbConfig{}
+		choiceCountValue := c.ChoiceCount.GetValue()
+		lbConfig.ChoiceCount = &choiceCountValue
+		return lbConfig
 	default:
 		return nil
 	}

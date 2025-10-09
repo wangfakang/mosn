@@ -70,8 +70,8 @@ func ConvertClustersConfig(xdsClusters []*envoy_config_cluster_v3.Cluster) []*v2
 		// so we need another hack way to solve the infinite loop problem that may be caused by
 		// istio transparent hijacking
 		bindConfig := xdsCluster.GetUpstreamBindConfig()
-		// the address 127.0.0.6 and port value 0 is used in istio inbound
-		if bindConfig.GetSourceAddress().GetAddress() == "127.0.0.6" &&
+		// the address 127.0.0.6 or ::6 and port value 0 is used in istio inbound
+		if (bindConfig.GetSourceAddress().GetAddress() == "127.0.0.6" || bindConfig.GetSourceAddress().GetAddress() == "::6") &&
 			bindConfig.GetSourceAddress().GetPortValue() == 0 {
 			cluster.LBOriDstConfig = v2.LBOriDstConfig{
 				ReplaceLocal: true,
@@ -92,10 +92,18 @@ func ConvertClustersConfig(xdsClusters []*envoy_config_cluster_v3.Cluster) []*v2
 }
 
 // TODO support more LB converter
-func convertLbConfig(config interface{}) v2.IsCluster_LbConfig {
-	switch config.(type) {
+func convertLbConfig(config interface{}) *v2.LbConfig {
+	switch c := config.(type) {
 	case *envoy_config_cluster_v3.Cluster_LeastRequestLbConfig:
-		return &v2.LeastRequestLbConfig{ChoiceCount: config.(*envoy_config_cluster_v3.Cluster_LeastRequestLbConfig).ChoiceCount.GetValue()}
+		lbConfig := &v2.LbConfig{}
+
+		choiceCountValue := c.ChoiceCount.GetValue()
+		lbConfig.ChoiceCount = &choiceCountValue
+
+		activeRequestBiasValue := c.ActiveRequestBias.GetDefaultValue()
+		lbConfig.ActiveRequestBias = &activeRequestBiasValue
+
+		return lbConfig
 	default:
 		return nil
 	}

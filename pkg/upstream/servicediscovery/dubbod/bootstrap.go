@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path"
+	"path/filepath"
 
 	"github.com/go-chi/chi"
 	v2 "mosn.io/mosn/pkg/config/v2"
@@ -40,14 +40,15 @@ type dubboConfig struct {
 
 /*
 example config :
-   "extends": {
-	   "dubbo_registry": {
-		    "enable" : true,
-		    "server_port" : 20080,
-		    "api_port" : 10022,
-		    "log_path" : "/tmp"
+
+	   "extends": {
+		   "dubbo_registry": {
+			    "enable" : true,
+			    "server_port" : 20080,
+			    "api_port" : 10022,
+			    "log_path" : "/tmp"
+		   }
 	   }
-   }
 */
 func init() {
 	v2.RegisterParseExtendConfig("dubbo_registry", func(config json.RawMessage) error {
@@ -104,7 +105,7 @@ func initAPI() {
 	r.Post("/pub", publish)
 	r.Post("/unpub", unpublish)
 
-	_ = dubbologger.InitLog(path.Join(logPath, "dubbo.log"))
+	_ = dubbologger.InitLog(filepath.Join(logPath, "dubbo.log"))
 
 	// FIXME make port configurable
 	utils.GoWithRecover(func() {

@@ -19,6 +19,7 @@ package xprotocol
 
 import (
 	"sync/atomic"
+	"time"
 )
 
 // KeepaliveConfig is the config for xprotocol keepalive
@@ -32,6 +33,12 @@ type KeepaliveConfig struct {
 	TickCountIfSucc uint32
 	// if hb fails in a line, and count = fail_count_to_close, close this connection
 	FailCountToClose uint32
+	// whether to enable fast failure for heartbeat detection
+	FastFail bool
+	// the interval between heartbeat detections when fast failure for heartbeat detection is triggered
+	// this property should be set to a value greater than 0 to have any meaning.
+	// if set to an invalid value, it will be automatically set to 1s by default.
+	FastSendInterval time.Duration
 }
 
 var xprotoKeepaliveConfig atomic.Value
@@ -41,6 +48,8 @@ var DefaultKeepaliveConfig = KeepaliveConfig{
 	TickCountIfFail:  1,
 	TickCountIfSucc:  1,
 	FailCountToClose: 6,
+	FastFail:         false,
+	FastSendInterval: time.Second,
 }
 
 func init() {
@@ -49,5 +58,8 @@ func init() {
 
 // RefreshKeepaliveConfig refresh the keepalive config
 func RefreshKeepaliveConfig(c KeepaliveConfig) {
+	if c.FastFail && c.FastSendInterval <= 0 {
+		c.FastSendInterval = time.Second
+	}
 	xprotoKeepaliveConfig.Store(c)
 }

@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -103,8 +103,9 @@ type Cluster struct {
 	TLS                  TLSConfig           `json:"tls_context,omitempty"`
 	Hosts                []Host              `json:"hosts,omitempty"`
 	ConnectTimeout       *api.DurationConfig `json:"connect_timeout,omitempty"`
+	KeepAlive            KeepAlive           `json:"keepalive,omitempty"`
 	IdleTimeout          *api.DurationConfig `json:"idle_timeout,omitempty"`
-	LbConfig             IsCluster_LbConfig  `json:"lbconfig,omitempty"`
+	LbConfig             *LbConfig           `json:"lbconfig,omitempty"`
 	DnsRefreshRate       *api.DurationConfig `json:"dns_refresh_rate,omitempty"`
 	RespectDnsTTL        bool                `json:"respect_dns_ttl,omitempty"`
 	DnsLookupFamily      DnsLookupFamily     `json:"dns_lookup_family,omitempty"`
@@ -112,6 +113,7 @@ type Cluster struct {
 	DnsResolverFile      string              `json:"dns_resolver_file,omitempty"`
 	DnsResolverPort      string              `json:"dns_resolver_port,omitempty"`
 	SlowStart            SlowStartConfig     `json:"slow_start,omitempty"`
+	ClusterPoolEnable    bool                `json:"cluster_pool_enable,omitempty"`
 }
 
 type DnsResolverConfig struct {
@@ -128,6 +130,34 @@ type SlowStartConfig struct {
 	SlowStartDuration *api.DurationConfig `json:"slow_start_duration,omitempty"`
 	Aggression        float64             `json:"aggression,omitempty"`
 	MinWeightPercent  float64             `json:"min_weight_percent,omitempty"`
+}
+
+type KeepAliveConfig struct {
+	IntervalConfig api.DurationConfig `json:"interval,omitempty"`
+	TimeoutConfig  api.DurationConfig `json:"timeout,omitempty"`
+}
+
+type KeepAlive struct {
+	KeepAliveConfig
+	Interval time.Duration `json:"-"`
+	Timeout  time.Duration `json:"-"`
+}
+
+// MarshalJSON Marshal implement a json.Marshaler
+func (ka KeepAlive) MarshalJSON() ([]byte, error) {
+	ka.KeepAliveConfig.IntervalConfig.Duration = ka.Interval
+	ka.KeepAliveConfig.TimeoutConfig.Duration = ka.Timeout
+	return json.Marshal(ka.KeepAliveConfig)
+}
+
+// UnmarshalJSON implement a json.Unmarshaler
+func (ka *KeepAlive) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, &ka.KeepAliveConfig); err != nil {
+		return err
+	}
+	ka.Timeout = ka.KeepAliveConfig.TimeoutConfig.Duration
+	ka.Interval = ka.KeepAliveConfig.IntervalConfig.Duration
+	return nil
 }
 
 // HealthCheck is a configuration of health check
@@ -233,6 +263,7 @@ type ClusterManagerConfig struct {
 
 type ClusterManagerConfigJson struct {
 	TLSContext        TLSConfig `json:"tls_context,omitempty"`
+	ClusterPoolEnable bool      `json:"cluster_pool_enable,omitempty"`
 	ClusterConfigPath string    `json:"clusters_configs,omitempty"`
 	ClustersJson      []Cluster `json:"clusters,omitempty"`
 }
@@ -256,7 +287,7 @@ func (cc *ClusterManagerConfig) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		for _, f := range files {
-			fileName := path.Join(cc.ClusterConfigPath, f.Name())
+			fileName := filepath.Join(cc.ClusterConfigPath, f.Name())
 			cluster := Cluster{}
 			e := utils.ReadJsonFile(fileName, &cluster)
 			switch e {
@@ -306,14 +337,14 @@ func (cc ClusterManagerConfig) MarshalJSON() (b []byte, err error) {
 		fileName = strings.ReplaceAll(fileName, sep, "_")
 		fileName = fileName + ".json"
 		delete(allFiles, fileName)
-		fileName = path.Join(cc.ClusterConfigPath, fileName)
+		fileName = filepath.Join(cc.ClusterConfigPath, fileName)
 		if err := utils.WriteFileSafety(fileName, data, 0644); err != nil {
 			return nil, err
 		}
 	}
 	// delete invalid files
 	for f := range allFiles {
-		os.Remove(path.Join(cc.ClusterConfigPath, f))
+		_ = os.Remove(filepath.Join(cc.ClusterConfigPath, f))
 	}
 	return json.Marshal(cc.ClusterManagerConfigJson)
 }

@@ -69,12 +69,19 @@ func NewClusterInfo(clusterConfig v2.Cluster) types.ClusterInfo {
 		lbType:               types.LoadBalancerType(clusterConfig.LbType),
 		resourceManager:      NewResourceManager(clusterConfig.CirBreThresholds),
 		clusterManagerTLS:    clusterConfig.ClusterManagerTLS,
+		clusterPoolEnable:    clusterConfig.ClusterPoolEnable,
+		lbConfig:             clusterConfig.LbConfig,
 	}
 	// set ConnectTimeout
 	if clusterConfig.ConnectTimeout != nil {
 		info.connectTimeout = clusterConfig.ConnectTimeout.Duration
 	} else {
 		info.connectTimeout = network.DefaultConnectTimeout
+	}
+	// set keepalive
+	{
+		info.keepAliveConfig.Interval = clusterConfig.KeepAlive.Interval
+		info.keepAliveConfig.Timeout = clusterConfig.KeepAlive.Timeout
 	}
 
 	// set IdleTimeout
@@ -212,15 +219,17 @@ type clusterInfo struct {
 	maxRequestsPerConn   uint32
 	mark                 uint32
 	resourceManager      types.ResourceManager
-	stats                types.ClusterStats
+	stats                *types.ClusterStats
 	lbSubsetInfo         types.LBSubsetInfo
 	lbOriDstInfo         types.LBOriDstInfo
 	clusterManagerTLS    bool
 	tlsMng               types.TLSClientContextManager
 	connectTimeout       time.Duration
+	keepAliveConfig      types.KeepAliveConfig
 	idleTimeout          time.Duration
-	lbConfig             v2.IsCluster_LbConfig
+	lbConfig             *v2.LbConfig
 	slowStart            types.SlowStart
+	clusterPoolEnable    bool
 }
 
 func (ci *clusterInfo) Name() string {
@@ -247,7 +256,7 @@ func (ci *clusterInfo) Mark() uint32 {
 	return ci.mark
 }
 
-func (ci *clusterInfo) Stats() types.ClusterStats {
+func (ci *clusterInfo) Stats() *types.ClusterStats {
 	return ci.stats
 }
 
@@ -270,6 +279,10 @@ func (ci *clusterInfo) ConnectTimeout() time.Duration {
 	return ci.connectTimeout
 }
 
+func (ci *clusterInfo) KeepAliveConfig() types.KeepAliveConfig {
+	return ci.keepAliveConfig
+}
+
 func (ci *clusterInfo) IdleTimeout() time.Duration {
 	return ci.idleTimeout
 }
@@ -278,7 +291,7 @@ func (ci *clusterInfo) LbOriDstInfo() types.LBOriDstInfo {
 	return ci.lbOriDstInfo
 }
 
-func (ci *clusterInfo) LbConfig() v2.IsCluster_LbConfig {
+func (ci *clusterInfo) LbConfig() *v2.LbConfig {
 	return ci.lbConfig
 }
 
@@ -288,6 +301,10 @@ func (ci *clusterInfo) SubType() string {
 
 func (ci *clusterInfo) SlowStart() types.SlowStart {
 	return ci.slowStart
+}
+
+func (ci *clusterInfo) IsClusterPoolEnable() bool {
+	return ci.clusterPoolEnable
 }
 
 type clusterSnapshot struct {

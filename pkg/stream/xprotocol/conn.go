@@ -105,6 +105,10 @@ func (sc *streamConn) Dispatch(buf types.IoBuffer) {
 	// decode frames
 	for {
 		if buf.Len() == 0 {
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [Dispatch] buf.Len() == 0, connection %d local addr: %s, remote addr: %s",
+					sc.netConn.ID(), sc.netConn.LocalAddr(), sc.netConn.RemoteAddr())
+			}
 			return
 		}
 		// 1. get stream-level ctx with bufferCtx
@@ -120,6 +124,10 @@ func (sc *streamConn) Dispatch(buf types.IoBuffer) {
 
 		// 2.1 no enough data, break loop
 		if frame == nil && err == nil {
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [Dispatch] continue read data connection %d local addr: %s, remote addr: %s",
+					sc.netConn.ID(), sc.netConn.LocalAddr(), sc.netConn.RemoteAddr())
+			}
 			return
 		}
 
@@ -387,7 +395,7 @@ func (sc *streamConn) newClientStream(ctx context.Context) *xStream {
 	clientStream.direction = stream.ClientStream
 	clientStream.ctx = ctx
 	_ = variable.Set(clientStream.ctx, types.VariableStreamID, clientStream.id)
-	_ = variable.Set(clientStream.ctx, types.VariableDownStreamProtocol, sc.protocol.Name())
+	_ = variable.Set(clientStream.ctx, types.VariableUpstreamProtocol, sc.protocol.Name())
 	clientStream.sc = sc
 
 	return clientStream

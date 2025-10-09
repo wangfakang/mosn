@@ -64,6 +64,10 @@ func (f *grpcServerFilterFactory) CreateFilterChain(ctx context.Context, callbac
 }
 
 func (f *grpcServerFilterFactory) Init(param interface{}) error {
+	var (
+		sw  *registerServerWrapper
+		err error
+	)
 	cfg, ok := param.(*v2.Listener)
 	if !ok {
 		return ErrInvalidConfig
@@ -76,12 +80,16 @@ func (f *grpcServerFilterFactory) Init(param interface{}) error {
 	// GetStreamFilters from listener name
 	f.streamFilterFactory = streamfilter.GetStreamFilterManager().GetStreamFilterFactory(cfg.Name)
 
-	//
 	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(f.UnaryInterceptorFilter),
 		grpc.StreamInterceptor(f.StreamInterceptorFilter),
 	}
-	sw, err := f.handler.New(addr, f.config.GrpcConfig, opts...)
+	if cfg.Network == networkUnix {
+		sw, err = f.handler.NewUnix(addr, f.config.GrpcConfig, opts...)
+	} else {
+		sw, err = f.handler.New(addr, f.config.GrpcConfig, opts...)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -99,6 +107,7 @@ func (f *grpcServerFilterFactory) UnaryInterceptorFilter(ctx context.Context, re
 		// add recover, or process will be crashed if handler cause a panic
 		if r := recover(); r != nil {
 			log.DefaultLogger.Alertf(types.ErrorKeyProxyPanic, "[grpc] [unary] grpc unary handle panic: %v, method: %s, stack:%s", r, info.FullMethod, string(debug.Stack()))
+			err = errors.New("grpc unary occur panic")
 		}
 	}()
 	sfc := streamfilter.GetDefaultStreamFilterChain()
@@ -221,13 +230,29 @@ type Handler struct {
 
 // New a grpc server with address. Same address returns same server, which can be start only once.
 func (s *Handler) New(addr string, conf json.RawMessage, options ...grpc.ServerOption) (*registerServerWrapper, error) {
+	return s.newGRPCServer(addr, networkTcp, conf, options...)
+}
+
+func (s *Handler) NewUnix(addr string, conf json.RawMessage, options ...grpc.ServerOption) (*registerServerWrapper, error) {
+	return s.newGRPCServer(addr, networkUnix, conf, options...)
+}
+
+func (s *Handler) newGRPCServer(addr string, network string, conf json.RawMessage, options ...grpc.ServerOption) (*registerServerWrapper, error) {
+	var (
+		ln  *Listener
+		err error
+	)
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	sw, ok := s.servers[addr]
 	if ok {
 		return sw, nil
 	}
-	ln, err := NewListener(addr)
+	if network == networkUnix {
+		ln, err = NewUnixListener(addr)
+	} else {
+		ln, err = NewListener(addr)
+	}
 	if err != nil {
 		log.DefaultLogger.Errorf("create a listener failed: %v", err)
 		return nil, err

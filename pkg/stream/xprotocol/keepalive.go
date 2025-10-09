@@ -19,6 +19,7 @@ package xprotocol
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -30,16 +31,25 @@ import (
 	"mosn.io/pkg/utils"
 )
 
+var (
+	nilTask = &fastKeepAliveTask{}
+)
+
 // StreamReceiver to receive keep alive response
 type xprotocolKeepAlive struct {
 	Codec     str.Client
 	Protocol  api.XProtocol
 	Timeout   time.Duration
 	Callbacks []types.KeepAliveCallback
+	// Interval Use Interval to start a scheduled task to send heartbeat messages.
+	// If the value is 0, the scheduled task is not started
+	Interval  time.Duration
+	afterFunc func(d time.Duration, f func()) *time.Timer // for easy unit test
 
 	heartbeatFailCount atomicex.Uint32 // the number of consecutive heartbeat failures, will be reset after hb succ
 	previousIsSucc     atomicex.Bool   // the previous heartbeat result
 	tickCount          atomicex.Uint32 // tick intervals after the last heartbeat request sent
+	fastFailTask       atomicex.Value  // fast fail task for keepalive check.
 
 	idleFree *idleFree
 
@@ -75,6 +85,7 @@ func (kp *xprotocolKeepAlive) loadAndDelete(key uint64) (val *keepAliveTimeout, 
 }
 
 // NewKeepAlive creates a keepalive object
+// Deprecated: please use NewKeepAliveWithConfig instead, this function will be removed in future version
 func NewKeepAlive(codec str.Client, proto api.XProtocol, timeout time.Duration) types.KeepAlive {
 	kp := &xprotocolKeepAlive{
 		Codec:     codec,
@@ -88,16 +99,79 @@ func NewKeepAlive(codec str.Client, proto api.XProtocol, timeout time.Duration) 
 	// initially set previous heartbeat request success
 	kp.previousIsSucc.Store(true)
 
+	// initially setup sets the heartbeat check fast failure task to nil
+	kp.fastFailTask.Store(nilTask)
+
 	// register keepalive to connection event listener
 	// if connection is closed, keepalive should stop
 	kp.Codec.AddConnectionEventListener(kp)
 	return kp
 }
 
+// NewKeepAliveWithConfig creates a keepalive object with keepalive config
+func NewKeepAliveWithConfig(codec str.Client, proto api.XProtocol, conf types.KeepAliveConfig) types.KeepAlive {
+	if conf.Timeout <= 0 {
+		conf.Timeout = time.Second // set default timeout
+	}
+	kp := &xprotocolKeepAlive{
+		Codec:     codec,
+		Protocol:  proto,
+		Timeout:   conf.Timeout,
+		Interval:  conf.Interval,
+		afterFunc: time.AfterFunc,
+		Callbacks: make([]types.KeepAliveCallback, 0),
+		stop:      make(chan struct{}),
+		requests:  make(map[uint64]*keepAliveTimeout),
+	}
+
+	// initially set previous heartbeat request success
+	kp.previousIsSucc.Store(true)
+
+	// initially setup sets the heartbeat check fast failure task to nil
+	kp.fastFailTask.Store(nilTask)
+
+	// register keepalive to connection event listener
+	// if connection is closed, keepalive should stop
+	kp.Codec.AddConnectionEventListener(kp)
+	return kp
+}
+
+func (kp *xprotocolKeepAlive) StartSchedule() {
+	if kp.Interval <= 0 {
+		return
+	}
+	if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+		log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] [start schedule] conn id:[%d], interval: %v",
+			kp.Codec.ConnID(), kp.Interval)
+	}
+	kp.runSchedule()
+}
+
+func (kp *xprotocolKeepAlive) runSchedule() {
+	kp.afterFunc(kp.Interval, func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.DefaultLogger.Alertf("upstream.keepalive", "[stream] [xprotocol] [keepalive] "+
+					"Schedule send keepalive heartbeat conn id:[%d], panic %v\n%s",
+					kp.Codec.ConnID(), r, debug.Stack())
+			}
+			select {
+			case <-kp.stop:
+				return
+			default:
+				kp.runSchedule()
+			}
+		}()
+		kp.SendKeepAlive()
+	})
+}
+
 // keepalive should stop when connection closed
 func (kp *xprotocolKeepAlive) OnEvent(event api.ConnectionEvent) {
 	if event.IsClose() || event.ConnectFailure() {
 		kp.Stop()
+	} else if event == api.Connected {
+		kp.StartSchedule()
 	}
 }
 
@@ -146,7 +220,6 @@ func (kp *xprotocolKeepAlive) StartIdleTimeout() {
 
 // The function will be called when connection in the codec is idle
 func (kp *xprotocolKeepAlive) sendKeepAlive() {
-
 	ctx := context.Background()
 	sender := kp.Codec.NewStream(ctx, kp)
 	id := sender.GetStream().ID()
@@ -174,6 +247,39 @@ func (kp *xprotocolKeepAlive) GetTimeout() time.Duration {
 	return kp.Timeout
 }
 
+func (kp *xprotocolKeepAlive) startFastKeepAliveTask() {
+	select {
+	case <-kp.stop:
+		if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+			log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] connection %d allready stop keepalive, skip start fast fail task", kp.Codec.ConnID())
+		}
+		return
+	default:
+	}
+
+	if v := kp.fastFailTask.Load(); v == nilTask {
+		task := NewFastKeepAliveTask(kp.Codec.ConnID(), kp.sendKeepAlive, kp.stop)
+		if kp.fastFailTask.CompareAndSwap(nilTask, task) {
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] connection %d start fast fail task", kp.Codec.ConnID())
+			}
+			task.Start()
+		}
+	}
+}
+
+func (kp *xprotocolKeepAlive) stopFastKeepAliveTask() {
+	if v := kp.fastFailTask.Load(); v != nilTask {
+		task := v.(*fastKeepAliveTask)
+		if kp.fastFailTask.CompareAndSwap(task, nilTask) {
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] connection %d stop fast fail task", kp.Codec.ConnID())
+			}
+			task.Stop()
+		}
+	}
+}
+
 func (kp *xprotocolKeepAlive) HandleTimeout(id uint64) {
 	c := xprotoKeepaliveConfig.Load().(KeepaliveConfig)
 	select {
@@ -198,6 +304,11 @@ func (kp *xprotocolKeepAlive) HandleTimeout(id uint64) {
 		kp.Codec.Close()
 	}
 	kp.runCallback(types.KeepAliveTimeout)
+
+	if c.FastFail {
+		// start the heartbeat check fast failure task when the heartbeat check fails
+		kp.startFastKeepAliveTask()
+	}
 }
 
 func (kp *xprotocolKeepAlive) HandleSuccess(id uint64) {
@@ -222,6 +333,9 @@ func (kp *xprotocolKeepAlive) HandleSuccess(id uint64) {
 	kp.heartbeatFailCount.Store(0)
 	kp.previousIsSucc.Store(true)
 
+	// stop the heartbeat check fast failure task when the heartbeat check success
+	kp.stopFastKeepAliveTask()
+
 	kp.runCallback(types.KeepAliveSuccess)
 }
 
@@ -229,6 +343,7 @@ func (kp *xprotocolKeepAlive) Stop() {
 	kp.once.Do(func() {
 		log.DefaultLogger.Infof("[stream] [xprotocol] [keepalive] connection %d stopped keepalive", kp.Codec.ConnID())
 		close(kp.stop)
+		kp.stopFastKeepAliveTask()
 	})
 }
 
@@ -263,4 +378,74 @@ func startTimeout(id uint64, keep types.KeepAlive) *keepAliveTimeout {
 
 func (t *keepAliveTimeout) onTimeout() {
 	t.KeepAlive.HandleTimeout(t.ID)
+}
+
+func NewFastKeepAliveTask(connID uint64, sendKeepAlive func(), stopKeepAlive chan struct{}) *fastKeepAliveTask {
+	f := &fastKeepAliveTask{
+		connID:        connID,
+		sendKeepAlive: sendKeepAlive,
+		stopKeepAlive: stopKeepAlive,
+	}
+	f.start.Store(false)
+	return f
+}
+
+type fastKeepAliveTask struct {
+	connID        uint64
+	sendKeepAlive func()
+	start         atomicex.Bool
+	stopTask      chan struct{}
+	stopKeepAlive chan struct{}
+}
+
+func (f *fastKeepAliveTask) Start() {
+	if f.start.CAS(false, true) {
+		f.stopTask = make(chan struct{})
+		go f.safeFastSendKeepAliveLoop()
+	}
+}
+
+func (f *fastKeepAliveTask) safeFastSendKeepAliveLoop() {
+	defer func() {
+		if err := recover(); err != nil {
+			log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] [fastfail] connection %d fast send keepalive loop panic: %v", f.connID, err)
+		}
+	}()
+
+	var (
+		c      = xprotoKeepaliveConfig.Load().(KeepaliveConfig)
+		ticker = time.NewTicker(c.FastSendInterval)
+	)
+
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-f.stopKeepAlive:
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] [fastfail] connection %d allready stop keepalive, quit fast fail task", f.connID)
+			}
+			return
+		case <-f.stopTask:
+			if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+				log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] [fastfail] connection %d already stop fast fail task", f.connID)
+			}
+			return
+		case <-ticker.C:
+			if c.FastFail {
+				if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
+					log.DefaultLogger.Debugf("[stream] [xprotocol] [keepalive] [fastfail] connection %d send a keepalive request", f.connID)
+				}
+				f.sendKeepAlive()
+			} else {
+				return
+			}
+		}
+	}
+}
+
+func (f *fastKeepAliveTask) Stop() {
+	if f.start.CAS(true, false) {
+		close(f.stopTask)
+	}
 }

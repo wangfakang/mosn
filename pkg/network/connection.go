@@ -35,17 +35,19 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"golang.org/x/sys/unix"
 	"mosn.io/api"
-	"mosn.io/mosn/pkg/log"
-	"mosn.io/mosn/pkg/mtls"
-	"mosn.io/mosn/pkg/types"
 	"mosn.io/pkg/buffer"
 	"mosn.io/pkg/utils"
 	"mosn.io/pkg/variable"
+
+	"mosn.io/mosn/pkg/log"
+	"mosn.io/mosn/pkg/mtls"
+	"mosn.io/mosn/pkg/types"
 )
 
 // Network related const
 const (
-	DefaultReadBufferSize = 1 << 7
+	DefaultReadBufferSize    = 1 << 7
+	DefaultUDPReadBufferSize = 4096
 
 	NetBufferDefaultSize     = 0
 	NetBufferDefaultCapacity = 1 << 4
@@ -207,7 +209,7 @@ func newServerConnection(ctx context.Context, rawc net.Conn, stopChan chan struc
 	if conn.network == "udp" {
 		if val, err := variable.Get(ctx, types.VariableAcceptBuffer); err == nil && val != nil {
 			buf := val.([]byte)
-			conn.readBuffer = buffer.GetIoBuffer(UdpPacketMaxSize)
+			conn.readBuffer = buffer.GetIoBuffer(conn.getUDPReadBufferSize())
 			conn.readBuffer.Write(buf)
 			conn.updateReadBufStats(int64(conn.readBuffer.Len()), int64(conn.readBuffer.Len()))
 		}
@@ -257,11 +259,11 @@ func (c *connection) SetIdleTimeout(readTimeout time.Duration, idleTimeout time.
 	c.newIdleChecker(readTimeout, idleTimeout)
 }
 
-func (conn *connection) OnConnectionEvent(event api.ConnectionEvent) {
+func (c *connection) OnConnectionEvent(event api.ConnectionEvent) {
 	if log.DefaultLogger.GetLogLevel() >= log.DEBUG {
 		log.DefaultLogger.Debugf("[network] receive new connection event %s, try to handle", event)
 	}
-	for _, listener := range conn.connCallbacks {
+	for _, listener := range c.connCallbacks {
 		listener.OnEvent(event)
 	}
 }
@@ -549,12 +551,20 @@ func (c *connection) setReadDeadline() {
 	}
 }
 
+func (c *connection) getUDPReadBufferSize() int {
+	if c.defaultReadBufferSize != 0 && c.defaultReadBufferSize != DefaultReadBufferSize {
+		return c.defaultReadBufferSize
+	} else {
+		return DefaultUDPReadBufferSize
+	}
+}
+
 func (c *connection) doRead() (err error) {
 	if c.readBuffer == nil {
 		switch c.network {
 		case "udp":
 			// A UDP socket will Read up to the size of the receiving buffer and will discard the rest
-			c.readBuffer = buffer.GetIoBuffer(UdpPacketMaxSize)
+			c.readBuffer = buffer.GetIoBuffer(c.getUDPReadBufferSize())
 		default: // unix or tcp
 			c.readBuffer = buffer.GetIoBuffer(c.defaultReadBufferSize)
 		}
